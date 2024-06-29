@@ -1,11 +1,11 @@
 import torch
 import torch.nn as nn
-from torchvision.datasets.folder import default_loader
 from tqdm import tqdm
 import argparse
 import os
+import copy
 
-from utils import get_data, save_images, setup_logging
+from utils import get_data, save_images, setup_logging, update_ema_params
 from unet import UNet
 
 import logging
@@ -88,6 +88,10 @@ def train(args: argparse.Namespace):
         device=device,
     ).to(device)
 
+    ema_model = copy.deepcopy(model).eval().requires_grad_(False)
+    ema_steps = 0
+    ema_warmups = 2000
+
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
     criterion = nn.MSELoss()
 
@@ -115,6 +119,14 @@ def train(args: argparse.Namespace):
             loss.backward()
             opt.step()
 
+            # EMA update
+            if ema_steps >= ema_warmups:
+                update_ema_params(ema_model, model, decay_rate=0.995)
+            else:
+                # update ema model with source model weight
+                ema_model.load_state_dict(model.state_dict())
+                ema_steps += 1
+
             pbar.set_postfix(MSE=loss.item())
             logger.add_scalar("MSE", loss.item(), global_step=epoch * l + i)
 
@@ -123,12 +135,31 @@ def train(args: argparse.Namespace):
             torch.save(
                 model.state_dict(), os.path.join("models", args.run, "best.pth")
             )
+            torch.save(
+                ema_model.state_dict(),
+                os.path.join("models", args.run, "best_ema.pth"),
+            )
 
         if (epoch + 1) % 10 == 0:
             sampled_image = diffusion.sample(model, n=images.shape[0])
+            sampled_ema_image = diffusion.sample(ema_model, n=images.shape[0])
             save_images(
-                sampled_image, os.path.join("results", args.run, f"{epoch}.jpg")
+                sampled_image,
+                os.path.join("results", args.run, f"{epoch}.jpg"),
             )
+            save_images(
+                sampled_ema_image,
+                os.path.join("results", args.run, f"{epoch}_ema.jpg"),
+            )
+
+    torch.save(
+        model.state_dict(),
+        os.path.join("models", args.run, "last.pth"),
+    )
+    torch.save(
+        ema_model.state_dict(),
+        os.path.join("models", args.run, "last_ema.pth"),
+    )
 
 
 if __name__ == "__main__":

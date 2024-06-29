@@ -8,6 +8,17 @@ import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 
 
+def update_ema_params(
+    target: torch.nn.Module, source: torch.nn.Module, decay_rate=0.995
+):
+    targParams = target.parameters()
+    srcParams = source.parameters()
+    for targParam, srcParam in zip(targParams, srcParams):
+        targParam.data.mul_(decay_rate).add_(
+            srcParam.data, alpha=1 - decay_rate
+        )
+
+
 def plot_images(images: torch.Tensor):
     plt.figure(figsize=(32, 32))
     plt.imshow(
