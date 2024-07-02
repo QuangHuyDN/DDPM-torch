@@ -242,3 +242,101 @@ class UNet(nn.Module):
 
         out = self.outc(x)
         return out
+
+
+class ConditionalUNet(nn.Module):
+    def __init__(
+        self,
+        in_chans: int = 3,
+        out_chans: int = 3,
+        time_dim: int = 256,
+        img_size: int = 64,
+        dims: List[int] = None,
+        num_classes: int = None,
+        device: str = "cuda",
+    ):
+        super().__init__()
+        self.device = device
+        self.img_size = img_size
+        self.time_dim = time_dim
+        if not dims:
+            dims = [64, 128, 256, 512]
+        self.dims = dims
+
+        self.inc = DoubleConvWithResidual(in_chans, self.dims[0])
+
+        self.down1 = Down(self.dims[0], self.dims[1])
+        self.sa1 = SelfAttentionBlock(self.dims[1], img_size // 2)
+
+        self.down2 = Down(self.dims[1], self.dims[2])
+        self.sa2 = SelfAttentionBlock(self.dims[2], img_size // 4)
+
+        self.down3 = Down(self.dims[2], self.dims[2])
+        self.sa3 = SelfAttentionBlock(self.dims[2], img_size // 8)
+
+        self.bot1 = DoubleConvWithResidual(self.dims[2], self.dims[3])
+        self.bot2 = DoubleConvWithResidual(self.dims[3], self.dims[3])
+        self.bot3 = DoubleConvWithResidual(self.dims[3], self.dims[2])
+
+        self.up1 = Up(2 * self.dims[2], self.dims[1])
+        self.sa4 = SelfAttentionBlock(self.dims[1], img_size // 4)
+
+        self.up2 = Up(2 * self.dims[1], self.dims[0])
+        self.sa5 = SelfAttentionBlock(self.dims[0], img_size // 2)
+
+        self.up3 = Up(2 * self.dims[0], self.dims[0])
+        self.sa6 = SelfAttentionBlock(self.dims[0], img_size)
+
+        self.outc = nn.Conv2d(self.dims[0], out_chans, kernel_size=1)
+
+        self.num_classes = num_classes
+        if self.num_classes:
+            assert (
+                self.num_classes > 0
+            ), "Number of data classes must be positive"
+            self.label_emb = nn.Embedding(num_classes, time_dim)
+
+    def pos_encoding(self, t: torch.Tensor, channels: int):
+        inv_freq = 1.0 / (
+            10000
+            ** (
+                torch.arange(0, channels, 2, device=self.device).float()
+                / channels
+            )
+        )
+        pos_enc_a = torch.sin(t.repeat(1, channels // 2) * inv_freq)
+        pos_enc_b = torch.cos(t.repeat(1, channels // 2) * inv_freq)
+        pos_enc = torch.cat([pos_enc_a, pos_enc_b], dim=-1)
+        return pos_enc
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor, y: torch.Tensor = None):
+        t = t.unsqueeze(-1).type(torch.float)
+        t = self.pos_encoding(t, self.time_dim)
+
+        if y:
+            t += self.label_emb(y)
+
+        x1 = self.inc(x)
+
+        x2 = self.down1(x1, t)
+        x2 = self.sa1(x2)
+
+        x3 = self.down2(x2, t)
+        x3 = self.sa2(x3)
+
+        x4 = self.down3(x3, t)
+        x4 = self.sa3(x4)
+
+        x4 = self.bot1(x4)
+        x4 = self.bot2(x4)
+        x4 = self.bot3(x4)
+
+        x = self.up1(x4, x3, t)
+        x = self.sa4(x)
+        x = self.up2(x, x2, t)
+        x = self.sa5(x)
+        x = self.up3(x, x1, t)
+        x = self.sa6(x)
+
+        out = self.outc(x)
+        return out
