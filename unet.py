@@ -313,7 +313,7 @@ class ConditionalUNet(nn.Module):
         t = t.unsqueeze(-1).type(torch.float)
         t = self.pos_encoding(t, self.time_dim)
 
-        if y:
+        if y is not None:
             t += self.label_emb(y)
 
         x1 = self.inc(x)

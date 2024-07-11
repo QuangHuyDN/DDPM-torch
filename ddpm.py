@@ -33,7 +33,7 @@ class Diffusion:
         self.img_size = img_size
         self.device = device
 
-        self.beta = torch.linspace(beta_start, beta_end, noise_step)
+        self.beta = torch.linspace(beta_start, beta_end, noise_step).to(device)
         self.alpha = 1 - self.beta
         self.alpha_hat = torch.cumprod(self.alpha, dim=0)
 
@@ -80,6 +80,8 @@ def train(args: argparse.Namespace):
     setup_logging(args.run)
     device = f"cuda:{args.gpu_id}" if torch.cuda.is_available() else "cpu"
     dataloader = get_data(args)
+    torch.set_float32_matmul_precision("high")
+    torch.cuda.empty_cache()
 
     model = UNet(
         in_chans=args.in_chans,
@@ -100,9 +102,20 @@ def train(args: argparse.Namespace):
     logger = SummaryWriter(os.path.join("logs", args.run))
     l = len(dataloader)
     min_loss = torch.inf
+    start_epoch = 0
+
+    if os.path.exists(os.path.join("models", args.run, "ckpt.pth")):
+        ckpt = torch.load(os.path.join("models", args.run, "ckpt.pth"))
+
+        model.load_state_dict(ckpt["model_weight"])
+        ema_model.load_state_dict(ckpt["ema_weight"])
+        opt.load_state_dict(ckpt["optimizer"])
+        start_epoch = ckpt["epoch"] + 1
+        min_loss = ckpt["min_loss"]
+        ema_steps = ckpt["ema_steps"]
 
     model.train()
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         logging.info(f"Starting epoch {epoch + 1}:")
         epoch_loss = 0
         pbar = tqdm(dataloader)
@@ -132,6 +145,11 @@ def train(args: argparse.Namespace):
 
         epoch_loss = epoch_loss / len(dataloader)
         if epoch_loss < min_loss:
+            print(
+                f"New best MSE score: {epoch_loss} < {min_loss}, update best weight at epoch {epoch + 1}."
+            )
+            min_loss = epoch_loss
+
             torch.save(
                 model.state_dict(), os.path.join("models", args.run, "best.pth")
             )
@@ -139,6 +157,18 @@ def train(args: argparse.Namespace):
                 ema_model.state_dict(),
                 os.path.join("models", args.run, "best_ema.pth"),
             )
+
+        torch.save(
+            {
+                "model_weight": model.state_dict(),
+                "ema_weight": ema_model.state_dict(),
+                "min_loss": min_loss,
+                "optimizer": opt.state_dict(),
+                "epoch": epoch,
+                "ema_steps": ema_steps,
+            },
+            os.path.join("models", args.run, "ckpt.pth"),
+        )
 
         if (epoch + 1) % 10 == 0:
             sampled_image = diffusion.sample(model, n=images.shape[0])
