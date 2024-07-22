@@ -20,8 +20,9 @@ python conditional_ddpm.py \
 --gpu_id <gpu_id>
 ```
 During the training process, there are several settings can be added to the training process.
-- --root_dir : directory to the training dataset, required.
+- --root_dir : directory to the training dataset (follow ImageNet structure), required.
 - --run : name of that training run, use for checkpointing location, required.
+- --num_classes : number of categories in the dataset.
 - --size : size of the image, default 64.
 - --in_chans : number of image color channels, default 3 (RGB).
 - --batch_size : size of each data batch, default 16.
